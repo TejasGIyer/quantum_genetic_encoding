@@ -279,9 +279,11 @@ Rhesus macaque (*Macaca mulatta*) chromosome 16 fragment — `NC_133421.1:910569
 ## 📚 References
 
 1. IBM Quantum Learning — [Data Encoding](https://quantum.cloud.ibm.com/learning/en/courses/quantum-machine-learning/data-encoding)
-2. Nakaji et al. — [Approximate Amplitude Encoding in Shallow Parameterized Quantum Circuits](https://doi.org/10.1103/PhysRevResearch.4.023136), Phys. Rev. Research **4**, 023136 (2022)
-3. IBM Qiskit — [FakeSherbrooke Backend](https://docs.quantum.ibm.com/api/qiskit-ibm-runtime/fake_provider)
-4. Schuld, M., & Petruccione, F. (2021). *Machine learning with quantum computers* (2nd ed.). Springer. [https://doi.org/10.1007/978-3-030-83098-4](https://doi.org/10.1007/978-3-030-83098-4)
+2. IBM Qiskit — [FakeSherbrooke Backend](https://docs.quantum.ibm.com/api/qiskit-ibm-runtime/fake_provider)
+3. Schuld, M., & Petruccione, F. (2021). [*Machine learning with quantum computers* (2nd ed.). Springer.](https://doi.org/10.1007/978-3-030-83098-4)
+4. Wright, L., Mc Keever, C., First, J. T., Johnston, R., Tillay, J., Chaney, S., Rosenkranz, M., & Lubasch, M. (2024). [*Noisy intermediate-scale quantum simulation of the one-dimensional wave equation*. arXiv.](https://doi.org/10.48550/arXiv.2402.19247)
+5. Riera Aroche, R., Ortiz García, Y. M., Martínez Arellano, M. A., & Riera Leal, A. (2024). [DNA as a perfect quantum computer based on the quantum physics principles. *Scientific Reports*, *14*(1), 11636.](https://doi.org/10.1038/s41598-024-62539-5)
+6. Lu, W., Onuchic, J. N., & Di Pierro, M. (2023). [An associative memory Hamiltonian model for DNA and nucleosomes. *PLoS Computational Biology*, *19*(3), e1011013.](https://doi.org/10.1371/journal.pcbi.1011013)
 ---
 
 ## 📄 License
