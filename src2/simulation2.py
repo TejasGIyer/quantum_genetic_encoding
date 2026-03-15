@@ -1,4 +1,4 @@
-"""Step 3a: Simulation — Transpile and run on Aer (ideal) + FakeSherbrooke (noisy)."""
+"""Step 3a (AAE): Simulation — Aer (ideal) + FakeSherbrooke (noisy)."""
 
 import numpy as np
 from qiskit import transpile
@@ -20,28 +20,25 @@ def get_circuit_metrics(transpiled_circuit):
 def run_dual_simulation(encoding_result, shots=8192):
     qc, qc_m = encoding_result['circuit'], encoding_result['circuit_meas']
     n_q = encoding_result['num_qubits']
-    enc_type = encoding_result['encoding_type']
     logical = {k: encoding_result[k] for k in ['logical_cnot', 'logical_ry', 'logical_total']}
 
     backend = FakeSherbrooke()
     transpiled_meas = transpile(qc_m, backend=backend, optimization_level=3)
     t_metrics = get_circuit_metrics(transpiled_meas)
 
-    print(f"\n  Logical gates ({enc_type}): {logical['logical_cnot']} CNOT + {logical['logical_ry']} Ry = {logical['logical_total']}")
-    print(f"  Transpiled (Sherbrooke): depth={t_metrics['depth']}, gates={t_metrics['total_gates']}, 2Q={t_metrics['two_qubit_gates']}, SWAPs={t_metrics['swap_count']}")
+    print(f"\n  Logical gates: {logical['logical_cnot']} CNOT + {logical['logical_ry']} Ry = {logical['logical_total']}")
+    print(f"  Transpiled: depth={t_metrics['depth']}, gates={t_metrics['total_gates']}, 2Q={t_metrics['two_qubit_gates']}, SWAPs={t_metrics['swap_count']}")
 
-    # Aer (ideal)
+    # Aer
     aer_sim = AerSimulator()
     aer_counts = aer_sim.run(transpile(qc_m, backend=aer_sim, optimization_level=0), shots=shots).result().get_counts()
-    aer_dm = None
     try:
         aer_dm = DensityMatrix(Statevector.from_instruction(qc))
     except Exception:
         aer_dm = _dm_from_counts(aer_counts, n_q)
 
-    # FakeSherbrooke (noisy)
+    # Sherbrooke
     sherbrooke_counts = backend.run(transpiled_meas, shots=shots).result().get_counts()
-    sherbrooke_dm = None
     try:
         noise = NoiseModel.from_backend(backend)
         dm_sim = AerSimulator(method='density_matrix', noise_model=noise)

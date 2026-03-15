@@ -1,89 +1,136 @@
-# Efficient Quantum Encoding of Genetic Information
+# Quantum Encoding of Genetic Information
 
-**PhysisTechne Symposium 2026 — Quantum Computing Track**
+### PhysisTechne Symposium 2026 — Quantum Computing Track
 
-A quantum computing pipeline that encodes a 50-base DNA sequence into optimized quantum circuits using two encoding strategies — **amplitude encoding** and **angle encoding** — and benchmarks them on IBM's FakeSherbrooke (127-qubit Eagle processor) simulator.
+<p align="center">
+  <b>Encoding DNA sequences into quantum circuits using three encoding strategies,<br>benchmarked on IBM's FakeSherbrooke (127-qubit Eagle processor)</b>
+</p>
+
+---
+
+## Overview
+
+This project implements a complete pipeline for encoding DNA sequences into optimized quantum circuits. The DNA is divided into codons (triplets), their frequencies are computed, and the resulting weight distribution is encoded into quantum states using three different strategies. Each encoding is simulated on both an ideal backend and a realistic noisy backend to measure fidelity degradation.
+
+Two pipelines are provided:
+
+| Pipeline | File | Encodings | Target |
+|---|---|---|---|
+| **Pipeline 1** | `main.py` | Amplitude + Angle | 50-base sequence |
+| **Pipeline 2** | `main_aae.py` | Approximate Amplitude (AAE) | 12,001-base sequence |
+
+---
 
 ## Results
 
-| Metric | Amplitude Encoding | Angle Encoding |
+### Pipeline 1 — Amplitude vs Angle Encoding (50 bases)
+
+| Metric | Amplitude | Angle |
 |---|---|---|
 | Qubits | 4 | 12 |
 | Logical CNOT gates | 8 | 0 |
 | Logical Ry gates | 8 | 12 |
-| Logical total gates | 16 | 12 |
-| Transpiled depth (Sherbrooke) | 67 | 5 |
-| Transpiled two-qubit gates | 15 | 0 |
-| F(initial, Aer) | 1.000000 | 1.000000 |
-| F(initial, Sherbrooke) | 0.958512 | 0.985308 |
-| Noise drop | 0.041488 | 0.014692 |
-| Reconstruction accuracy | 100% | 100% |
+| Transpiled depth | 67 | 5 |
+| Two-qubit gates (transpiled) | 15 | 0 |
+| F(initial, Aer) | 1.000 | 1.000 |
+| F(initial, Sherbrooke) | 0.959 | 0.985 |
+| Noise drop | 0.041 | 0.015 |
+| Reconstruction | 100% | 100% |
 
-## Pipeline
+### Pipeline 2 — Approximate Amplitude Encoding (12,001 bases)
 
-### Step 1 — Classical Bit Register
+| Metric | Value |
+|---|---|
+| Qubits | 7 |
+| Ansatz | Brickwall (6 layers) |
+| Parameters | 42 |
+| Logical gates | 60 (42 Ry + 18 CNOT) |
+| Transpiled depth | 39 |
+| Two-qubit gates (transpiled) | 18 |
+| Overlap O | 0.973 |
+| F(target, trained) | 0.947 |
+| F(trained, Sherbrooke) | 0.941 |
+| F(target, Sherbrooke) | 0.890 |
+| Reconstruction | 100% |
 
-Divide the DNA sequence into **codons** (triplets of 3 bases). Count the frequency of each unique codon — this is its **weight**. Build two classical registers:
+---
 
-- **Unique register** (12 entries): maps each unique codon to an index and stores its weight
-- **Position register** (17 entries): records which codon appears at every position in the sequence
+## Pipeline Architecture
 
-```
-ATGCGTACGTTAGCGTACGATCGTAGCTAGCTTGACGATCGTACGTTAGC
- → ['ATG', 'CGT', 'ACG', 'TTA', 'GCG', 'TAC', 'GAT', 'CGT', 'AGC', 'TAG', 'CTT', 'GAC', 'GAT', 'CGT', 'ACG', 'TTA', 'GC']
- → 17 codons, 12 unique, weights: CGT=3, ACG=2, TTA=2, GAT=2, rest=1
-```
+### Step 1 — Classical Bit Register (Codon Division)
+
+The DNA sequence is divided into codons (groups of 3 bases). The frequency of each unique codon is counted — this is its weight. Two registers are built:
+
+- **Unique register**: maps each unique codon → index and weight (used for quantum encoding)
+- **Position register**: records which codon appears at every position (used for reconstruction)
 
 ### Step 2 — Quantum Encoding
 
-Two encoding strategies are applied to the same codon weights:
+Three encoding strategies are implemented:
 
-**Amplitude Encoding:** Encodes codon weights as amplitudes of basis states on `ceil(log2(12)) = 4` qubits. Uses `2^(n-1) = 8` CNOT gates and `8` Ry rotation gates (16 total). The quantum state is:
+**Amplitude Encoding** (`src/encoding.py`)
+- Encodes weights as amplitudes of basis states: `|ψ⟩ = (1/N) Σᵢ weightᵢ |i⟩`
+- `ceil(log₂(N_unique))` qubits, `2^(n-1)` CNOT + `2^(n-1)` Ry gates
+- Exact encoding via `initialize()`
 
-```
-|ψ⟩ = (1/N) Σᵢ weightᵢ |i⟩
-```
+**Angle Encoding** (`src/encoding.py`)
+- Each unique codon → its own qubit with Ry rotation proportional to weight
+- `N_unique` qubits, `N_unique` Ry gates, 0 CNOTs, depth 1
+- Product state, no entanglement
 
-**Angle Encoding:** Encodes each codon weight as an Ry rotation angle on its own qubit — 12 qubits, 12 Ry gates, 0 CNOTs, depth 1. Weights are rescaled to (0, 2π]. The state is a product state (no entanglement):
+**Approximate Amplitude Encoding** (`src2/aae_encoding.py`)
+- Trains a shallow parameterized circuit (brickwall ansatz) to approximate the target state
+- Direct fidelity cost function: `C(θ) = 1 - Re⟨target|U(θ)|0⟩`
+- L-BFGS optimizer with statevector simulation
+- Scales to large sequences with O(poly(n)) circuit depth
 
-```
-|ψ⟩ = ⊗ᵢ Ry(θᵢ)|0⟩
-```
+### Step 3 — Simulation and Reconstruction
 
-### Step 3 — Simulation + Tomography + Reconstruction
+The encoded circuit is transpiled for IBM FakeSherbrooke and executed on:
 
-Both circuits are transpiled for FakeSherbrooke and run on:
+- **Aer Simulator**: ideal, no noise (baseline)
+- **FakeSherbrooke**: IBM Eagle r3 noise model (realistic hardware)
 
-- **Aer Simulator** (ideal, no noise) — baseline
-- **FakeSherbrooke** (IBM Eagle noise model) — realistic hardware noise
+Density matrices are extracted for fidelity computation. The DNA is reconstructed using the classical position register.
 
-Density matrices are extracted for fidelity calculation. The DNA is reconstructed using the classical position register.
+### Fidelity Metrics
 
-### Fidelity
+- **F(initial/target, Aer)**: does the ideal backend reproduce the target state?
+- **F(initial/target, Sherbrooke)**: end-to-end fidelity including noise
+- **Noise drop**: fidelity lost due to hardware noise
 
-Three fidelity metrics are computed:
-
-- `F(initial, Aer)` — does the ideal simulator reproduce the target state?
-- `F(initial, Sherbrooke)` — how much does noise degrade the state?
-- `F(Aer, Sherbrooke)` — direct comparison between backends
+---
 
 ## Project Structure
 
 ```
-├── main.py                    # Entry point — runs both encodings and prints comparison
-├── requirements.txt           # Python dependencies
-├── src/
-│   ├── __init__.py
-│   ├── compression.py         # Step 1: Codon division + classical register
-│   ├── encoding.py            # Step 2: Amplitude & angle encoding functions
-│   ├── simulation.py          # Step 3a: Aer + FakeSherbrooke simulation
-│   ├── reconstruction.py      # Step 3b: Tomography + classical register → DNA
+├── main.py                    # Pipeline 1: Amplitude + Angle encoding (50 bases)
+├── main_aae.py                # Pipeline 2: AAE encoding (12,001 bases)
+├── requirements.txt
+│
+├── src/                       # Pipeline 1 modules
+│   ├── compression.py         # Codon division + classical register
+│   ├── encoding.py            # Amplitude & Angle encoding
+│   ├── simulation.py          # Aer + FakeSherbrooke simulation
+│   ├── reconstruction.py      # DNA reconstruction from classical register
 │   └── fidelity.py            # Fidelity calculations
-├── results/
-│   └── summary.json           # Output metrics
-└── data/
-    └── dna_12000.txt           # Bonus: 12,001-base Rhesus monkey chr16 fragment
+│
+├── src2/                      # Pipeline 2 modules (AAE)
+│   ├── compression2.py        # Codon division + target distributions (p, p^H)
+│   ├── aae_encoding.py        # Brickwall ansatz + L-BFGS training
+│   ├── simulation2.py         # Aer + FakeSherbrooke simulation
+│   ├── reconstruction2.py     # DNA reconstruction
+│   └── fidelity2.py           # Fidelity (target vs trained vs noisy)
+│
+├── data/
+│   └── dna_12000.txt          # 12,001-base Rhesus macaque chr16 fragment
+│
+└── results/
+    ├── summary.json            # Pipeline 1 output
+    └── summary_aae.json        # Pipeline 2 output
 ```
+
+---
 
 ## Setup
 
@@ -98,32 +145,44 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
+# Pipeline 1: Amplitude + Angle encoding (50-base sequence)
 python main.py
+
+# Pipeline 2: AAE encoding (12,001-base sequence)
+python main_aae.py
 ```
 
-Runs both amplitude and angle encoding pipelines, prints detailed step-by-step output, a side-by-side comparison table, and saves results to `results/summary.json`.
+---
 
-## Requirements
+## DNA Sequences
 
-- Python 3.10+
-- Qiskit >= 1.0
-- Qiskit Aer >= 0.14
-- Qiskit IBM Runtime >= 0.20
-- NumPy >= 1.24
-
-## DNA Sequence
-
-**Target (50 bases):**
+**Pipeline 1 — 50 bases:**
 ```
 ATGCGTACGTTAGCGTACGATCGTAGCTAGCTTGACGATCGTACGTTAGC
 ```
 
-**Bonus (12,001 bases):** Rhesus macaque (*Macaca mulatta*) chromosome 16 fragment from `NC_133421.1:91056922-91068922`, gene LOC144335571. Stored in `data/dna_12000.txt`.
+**Pipeline 2 — 12,001 bases:**
+Rhesus macaque (*Macaca mulatta*) chromosome 16 fragment
+`NC_133421.1:91056922-91068922` — gene LOC144335571
+
+---
+
+## Requirements
+
+- Python 3.10+
+- Qiskit ≥ 1.0
+- Qiskit Aer ≥ 0.14
+- Qiskit IBM Runtime ≥ 0.20
+- NumPy ≥ 1.24
+- SciPy ≥ 1.10
+
+---
 
 ## References
 
-- IBM Quantum Learning — [Data Encoding](https://quantum.cloud.ibm.com/learning/en/courses/quantum-machine-learning/data-encoding)
-- Qiskit Documentation — [FakeSherbrooke](https://docs.quantum.ibm.com/api/qiskit-ibm-runtime/fake_provider)
+1. IBM Quantum Learning — [Data Encoding](https://quantum.cloud.ibm.com/learning/en/courses/quantum-machine-learning/data-encoding)
+2. Nakaji et al. — [Approximate Amplitude Encoding in Shallow Parameterized Quantum Circuits](https://doi.org/10.1103/PhysRevResearch.4.023136), Phys. Rev. Research 4, 023136 (2022)
+3. IBM Qiskit — [FakeSherbrooke Backend](https://docs.quantum.ibm.com/api/qiskit-ibm-runtime/fake_provider)
 
 ## License
 

@@ -1,9 +1,14 @@
-"""Step 1: Classical Bit Register — Codon division, frequency counting, register construction."""
+"""Step 1 (AAE): Classical Bit Register + target distributions for AAE training."""
 
+import os
 import numpy as np
 from collections import Counter, OrderedDict
 
-DNA_SEQUENCE = "ATGCGTACGTTAGCGTACGATCGTAGCTAGCTTGACGATCGTACGTTAGC"
+_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+_SEQ_FILE = os.path.join(_DATA_DIR, 'dna_12000.txt')
+
+with open(_SEQ_FILE, 'r') as f:
+    DNA_SEQUENCE = f.read().strip().replace('\n', '').replace(' ', '').replace('\r', '')
 
 
 def divide_into_codons(sequence):
@@ -19,12 +24,11 @@ def build_classical_register(sequence):
         if codon not in seen:
             seen[codon] = len(seen)
 
-    unique_codons = seen
-    n_unique = len(unique_codons)
+    n_unique = len(seen)
     n_qubits = int(np.ceil(np.log2(max(n_unique, 2))))
 
     unique_register = []
-    for codon, idx in unique_codons.items():
+    for codon, idx in seen.items():
         unique_register.append({
             'unique_index': idx, 'codon': codon,
             'weight': freq[codon], 'binary': format(idx, f'0{n_qubits}b'),
@@ -34,8 +38,7 @@ def build_classical_register(sequence):
     for pos, codon in enumerate(codon_sequence):
         position_register.append({
             'position': pos, 'codon': codon,
-            'unique_index': unique_codons[codon],
-            'binary': format(unique_codons[codon], f'0{n_qubits}b'),
+            'unique_index': seen[codon], 'binary': format(seen[codon], f'0{n_qubits}b'),
         })
 
     n_states = 2 ** n_qubits
@@ -43,37 +46,48 @@ def build_classical_register(sequence):
     for entry in unique_register:
         weight_vector[entry['unique_index']] = entry['weight']
 
+    d = weight_vector.copy()
+    norm = np.linalg.norm(d)
+    if norm > 0:
+        d /= norm
+
+    p_comp = d ** 2
+
+    N = n_states
+    d_H = np.zeros(N)
+    for j in range(N):
+        val = 0.0
+        for k in range(N):
+            val += d[k] * ((-1) ** bin(j & k).count('1'))
+        d_H[j] = val / np.sqrt(N)
+    p_hadamard = d_H ** 2
+
     return {
         'sequence': sequence, 'codon_sequence': codon_sequence,
-        'num_codons': len(codon_sequence), 'unique_codons': unique_codons,
+        'num_codons': len(codon_sequence), 'unique_codons': seen,
         'num_unique': n_unique, 'weights': dict(freq),
         'unique_register': unique_register, 'position_register': position_register,
         'num_qubits': n_qubits, 'weight_vector': weight_vector,
+        'd_normalized': d, 'p_comp': p_comp, 'p_hadamard': p_hadamard, 'd_hadamard': d_H,
     }
 
 
 def print_step1(result):
     seq = result['sequence']
     n_q = result['num_qubits']
+    d = result['d_normalized']
 
     print("=" * 65)
-    print("STEP 1: CLASSICAL BIT REGISTER (CODON-BASED)")
+    print("STEP 1: CLASSICAL BIT REGISTER")
     print("=" * 65)
-    print(f"\n  Sequence:        {seq}")
+    print(f"\n  Sequence:        {seq[:50]}...")
     print(f"  Length:          {len(seq)} bases")
     print(f"  Total codons:   {result['num_codons']}")
     print(f"  Unique codons:  {result['num_unique']}")
-    print(f"  Qubits:         {n_q} (ceil(log2({result['num_unique']})))")
-    print(f"  Qubit reduction: {(1 - n_q / (len(seq) * 2)) * 100:.1f}%")
+    print(f"  Qubits:         {n_q}   Hilbert space: 2^{n_q} = {2**n_q}")
 
-    print(f"\n  Unique codon register:")
-    print(f"  {'Idx':>4}  {'Binary':>{n_q}}  {'Codon':>6}  {'Weight':>6}")
-    print(f"  {'-'*4}  {'-'*n_q}  {'-'*6}  {'-'*6}")
-    for e in result['unique_register']:
-        print(f"  {e['unique_index']:4d}  {e['binary']}  {e['codon']:>6}  {e['weight']:6d}")
-
-    print(f"\n  Position register ({result['num_codons']} entries):")
-    print(f"  {'Pos':>4}  {'Codon':>6}  {'Idx':>4}  {'Binary':>{n_q}}")
-    print(f"  {'-'*4}  {'-'*6}  {'-'*4}  {'-'*n_q}")
-    for e in result['position_register']:
-        print(f"  {e['position']:4d}  {e['codon']:>6}  {e['unique_index']:4d}  {e['binary']}")
+    print(f"\n  Top 10 codons:")
+    sorted_reg = sorted(result['unique_register'], key=lambda e: e['weight'], reverse=True)
+    for e in sorted_reg[:10]:
+        idx = e['unique_index']
+        print(f"    {e['codon']:>6}  weight={e['weight']:4d}  p(j)={d[idx]**2:.6f}")
