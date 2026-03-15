@@ -192,7 +192,9 @@ Layer 2:  ─Ry──Ry──Ry──Ry──Ry──Ry──Ry─
 | Transpiled depth | 39 |
 | Two-qubit gates (transpiled) | 18 |
 | **Overlap O** | **0.973** |
+| **F(trained, aer)** | **1.000** |
 | **F(target, trained)** | **0.947** |
+| **F(target, aer)** | **0.947** |
 | **F(trained, Sherbrooke)** | **0.941** |
 | **F(target, Sherbrooke)** | **0.890** |
 | Noise drop | 0.060 |
