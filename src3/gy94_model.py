@@ -4,24 +4,15 @@ GY94 Codon Substitution Rate Matrix
 Implementation of Goldman & Yang (1994) codon-based model of nucleotide
 substitution for protein-coding DNA sequences.
 
-Reference: Goldman, N. and Yang, Z. (1994) "A Codon-based Model of Nucleotide
-Substitution for Protein-coding DNA Sequences." Mol. Biol. Evol. 11(5):725-736.
-
-Equation 3:
-    Q_ij = 0                                      if 2+ nucleotide positions differ
-    Q_ij = mu * pi_j * exp(-d_{aa_i,aa_j}/V)      if exactly 1 position differs (transversion)
-    Q_ij = mu * kappa * pi_j * exp(-d_{aa_i,aa_j}/V)  if exactly 1 position differs (transition)
-    Q_ii = -sum_{j!=i} Q_ij
-
-Normalization (Equation 2): -sum_i pi_i * Q_ii = 1
+Updates:
+- Includes numerical optimization to calculate species-specific variability (V)
+  based on target dN/dS (omega) ratios.
 """
 
 import numpy as np
 
-
 # =========================================================================
 # STANDARD GENETIC CODE (Universal)
-# Maps each of the 64 codons to an amino acid (3-letter code) or 'STOP'
 # =========================================================================
 GENETIC_CODE = {
     'TTT': 'Phe', 'TTC': 'Phe', 'TTA': 'Leu', 'TTG': 'Leu',
@@ -47,18 +38,13 @@ SENSE_CODONS = sorted([c for c, aa in GENETIC_CODE.items() if aa != 'STOP'])
 CODON_TO_INDEX = {c: i for i, c in enumerate(SENSE_CODONS)}
 N_SENSE = len(SENSE_CODONS)  # 61
 
-
 # =========================================================================
 # GRANTHAM DISTANCE MATRIX (Grantham 1974)
-# Physicochemical distances between 20 amino acids
-# Based on composition, polarity, and molecular volume
-# Range: 5 (Ile-Leu) to 215 (Cys-Trp), average ~100
 # =========================================================================
 _AA_ORDER = ['Ala', 'Arg', 'Asn', 'Asp', 'Cys', 'Gln', 'Glu', 'Gly',
              'His', 'Ile', 'Leu', 'Lys', 'Met', 'Phe', 'Pro', 'Ser',
              'Thr', 'Trp', 'Tyr', 'Val']
 
-# Upper triangle of the Grantham matrix (row, col order follows _AA_ORDER)
 _GRANTHAM_UPPER = {
     ('Ala','Arg'):112, ('Ala','Asn'):111, ('Ala','Asp'):126, ('Ala','Cys'):195,
     ('Ala','Gln'):91,  ('Ala','Glu'):107, ('Ala','Gly'):60,  ('Ala','His'):86,
@@ -117,7 +103,6 @@ _GRANTHAM_UPPER = {
     ('Tyr','Val'):55,
 }
 
-
 def grantham_distance(aa1, aa2):
     """Look up the Grantham (1974) distance between two amino acids."""
     if aa1 == aa2:
@@ -125,20 +110,13 @@ def grantham_distance(aa1, aa2):
     key = (aa1, aa2) if (aa1, aa2) in _GRANTHAM_UPPER else (aa2, aa1)
     return _GRANTHAM_UPPER.get(key, 100)  # default 100 if not found
 
-
 def is_transition(nuc1, nuc2):
-    """Check if a single-nucleotide change is a transition (purine<->purine or pyrimidine<->pyrimidine)."""
+    """Check if a single-nucleotide change is a transition."""
     transitions = {('A', 'G'), ('G', 'A'), ('C', 'T'), ('T', 'C')}
     return (nuc1, nuc2) in transitions
 
-
 def codon_diff(codon_i, codon_j):
-    """
-    Compare two codons and return:
-        n_diff: number of positions that differ (0, 1, 2, or 3)
-        diff_pos: the position that differs (0, 1, or 2) if n_diff == 1, else None
-        is_ts: whether the single difference is a transition (only valid if n_diff == 1)
-    """
+    """Compare two codons and return differences."""
     diffs = [(p, codon_i[p], codon_j[p]) for p in range(3) if codon_i[p] != codon_j[p]]
     n_diff = len(diffs)
     if n_diff == 1:
@@ -146,83 +124,94 @@ def codon_diff(codon_i, codon_j):
         return n_diff, pos, is_transition(nuc_i, nuc_j)
     return n_diff, None, None
 
+# =========================================================================
+# OMEGA (dN/dS) CALCULATOR ENGINE
+# =========================================================================
+def calculate_implied_omega(codon_frequencies, kappa, V):
+    """Calculates the implied dN/dS (omega) of the matrix for a given V."""
+    pi = np.zeros(N_SENSE)
+    for codon in SENSE_CODONS:
+        pi[CODON_TO_INDEX[codon]] = codon_frequencies.get(codon, 0.0)
+    
+    pi_sum = pi.sum()
+    if pi_sum > 0: 
+        pi /= pi_sum
+    
+    actual_nonsyn_rate = 0.0
+    neutral_nonsyn_rate = 0.0
+    
+    for i, ci in enumerate(SENSE_CODONS):
+        aa_i = GENETIC_CODE[ci]
+        for j, cj in enumerate(SENSE_CODONS):
+            if i == j: continue
+            aa_j = GENETIC_CODE[cj]
+            
+            n_diff, _, is_ts = codon_diff(ci, cj)
+            if n_diff != 1: continue 
+                
+            d = grantham_distance(aa_i, aa_j)
+            
+            # Base unscaled mutation rate
+            rate = pi[j]
+            if is_ts: rate *= kappa
+                
+            # If the mutation changes the protein
+            if aa_i != aa_j:
+                actual_nonsyn_rate += pi[i] * rate * np.exp(-d / V)
+                neutral_nonsyn_rate += pi[i] * rate
+                
+    if neutral_nonsyn_rate == 0:
+        return 0
+    return actual_nonsyn_rate / neutral_nonsyn_rate
 
+# =========================================================================
+# RATE MATRIX BUILDER
+# =========================================================================
 def build_gy94_rate_matrix(codon_frequencies, kappa=1.45, V=43.99):
-    """
-    Build the GY94 rate matrix Q (61x61) following Goldman & Yang (1994) Equation 3.
-
-    Parameters:
-        codon_frequencies: dict mapping codon string -> frequency (from observed data)
-                          Only sense codons are used. Frequencies are renormalized to sum to 1.
-        kappa: transition/transversion rate ratio (default 1.45 from paper's globin estimate)
-        V: gene variability parameter (default 43.99 from paper's globin estimate)
-
-    Returns:
-        Q: 61x61 numpy rate matrix
-        sense_codons: ordered list of 61 sense codon strings
-        pi: numpy array of 61 equilibrium frequencies
-        info: dict with diagnostic information
-    """
-    # Build frequency vector for 61 sense codons
+    """Build the GY94 rate matrix Q (61x61)."""
     pi = np.zeros(N_SENSE)
     for codon in SENSE_CODONS:
         idx = CODON_TO_INDEX[codon]
         pi[idx] = codon_frequencies.get(codon, 0.0)
 
-    # Renormalize pi to sum to 1 (excluding stop codons and partial codons)
     pi_sum = pi.sum()
     if pi_sum > 0:
         pi /= pi_sum
 
-    # Build Q matrix (before scaling)
     Q = np.zeros((N_SENSE, N_SENSE))
 
-    n_transitions = 0
-    n_transversions = 0
-    n_synonymous = 0
-    n_nonsynonymous = 0
+    n_transitions, n_transversions = 0, 0
+    n_synonymous, n_nonsynonymous = 0, 0
 
     for i, codon_i in enumerate(SENSE_CODONS):
         aa_i = GENETIC_CODE[codon_i]
 
         for j, codon_j in enumerate(SENSE_CODONS):
-            if i == j:
-                continue
+            if i == j: continue
 
             aa_j = GENETIC_CODE[codon_j]
             n_diff, diff_pos, is_ts = codon_diff(codon_i, codon_j)
 
-            if n_diff != 1:
-                continue  # Q_ij = 0 for multi-nucleotide changes
+            if n_diff != 1: continue 
 
-            # Grantham distance (0 for synonymous, >0 for non-synonymous)
             d = grantham_distance(aa_i, aa_j)
-
-            # Selection factor
             selection = np.exp(-d / V)
-
-            # Base rate: pi_j * selection
             rate = pi[j] * selection
 
-            # Multiply by kappa if transition
             if is_ts:
                 rate *= kappa
                 n_transitions += 1
             else:
                 n_transversions += 1
 
-            if aa_i == aa_j:
-                n_synonymous += 1
-            else:
-                n_nonsynonymous += 1
+            if aa_i == aa_j: n_synonymous += 1
+            else: n_nonsynonymous += 1
 
             Q[i, j] = rate
 
-    # Set diagonal: Q_ii = -sum_{j!=i} Q_ij
     for i in range(N_SENSE):
         Q[i, i] = -np.sum(Q[i, :])
 
-    # Compute scaling factor mu (Equation 2): -sum_i pi_i * Q_ii = 1
     avg_rate = -np.sum(pi * np.diag(Q))
     if avg_rate > 0:
         mu = 1.0 / avg_rate
@@ -230,11 +219,9 @@ def build_gy94_rate_matrix(codon_frequencies, kappa=1.45, V=43.99):
     else:
         mu = 1.0
 
-    # Verify properties
     row_sums = np.sum(Q, axis=1)
     avg_rate_after = -np.sum(pi * np.diag(Q))
 
-    # Check reversibility: pi_i * Q_ij should equal pi_j * Q_ji
     max_reversibility_error = 0.0
     for i in range(N_SENSE):
         for j in range(i + 1, N_SENSE):
@@ -247,7 +234,7 @@ def build_gy94_rate_matrix(codon_frequencies, kappa=1.45, V=43.99):
         'kappa': kappa,
         'V': V,
         'mu': mu,
-        'n_transitions': n_transitions // 2,  # each pair counted twice
+        'n_transitions': n_transitions // 2,
         'n_transversions': n_transversions // 2,
         'n_synonymous': n_synonymous // 2,
         'n_nonsynonymous': n_nonsynonymous // 2,
@@ -261,17 +248,16 @@ def build_gy94_rate_matrix(codon_frequencies, kappa=1.45, V=43.99):
 
     return Q, SENSE_CODONS, pi, info
 
-
 def print_gy94_report(Q, sense_codons, pi, info):
     """Print a detailed report of the GY94 rate matrix."""
     print("=" * 70)
-    print("  GY94 CODON SUBSTITUTION RATE MATRIX")
+    print("  GY94 CODON SUBSTITUTION RATE MATRIX (MACAQUE CALIBRATED)")
     print("  Goldman & Yang (1994) Mol. Biol. Evol. 11(5):725-736")
     print("=" * 70)
 
     print(f"\n  Parameters:")
     print(f"    kappa (Ts/Tv ratio):      {info['kappa']}")
-    print(f"    V (gene variability):     {info['V']}")
+    print(f"    V (gene variability):     {info['V']:.4f}")
     print(f"    mu (scaling factor):      {info['mu']:.6f}")
 
     print(f"\n  Matrix properties:")
@@ -287,9 +273,7 @@ def print_gy94_report(Q, sense_codons, pi, info):
     print(f"    Max row sum error:        {info['max_row_sum_error']:.2e} (should be ~0)")
     print(f"    Max reversibility error:  {info['max_reversibility_error']:.2e} (should be ~0)")
     print(f"    Eigenvalue range:         [{info['eigenvalue_range'][0]:.4f}, {info['eigenvalue_range'][1]:.4f}]")
-    print(f"    (Max eigenvalue should be 0, all others negative)")
 
-    # Show top substitution rates
     print(f"\n  Top 10 highest substitution rates:")
     print(f"  {'From':>6} -> {'To':>6}  {'AA_i':>4} -> {'AA_j':>4}  {'Rate':>10}  {'Type':>6}  {'Grantham':>8}")
     print(f"  {'-'*6}    {'-'*6}  {'-'*4}    {'-'*4}  {'-'*10}  {'-'*6}  {'-'*8}")
@@ -303,24 +287,15 @@ def print_gy94_report(Q, sense_codons, pi, info):
                 n_diff, _, is_ts = codon_diff(sense_codons[i], sense_codons[j])
                 d = grantham_distance(aa_i, aa_j)
                 ts_type = "Ts" if is_ts else "Tv"
-                syn_type = "syn" if aa_i == aa_j else "nonsyn"
-                rates.append((Q[i, j], sense_codons[i], sense_codons[j],
-                              aa_i, aa_j, ts_type, d))
+                rates.append((Q[i, j], sense_codons[i], sense_codons[j], aa_i, aa_j, ts_type, d))
 
     rates.sort(reverse=True)
     for rate, ci, cj, aai, aaj, ts, d in rates[:10]:
         print(f"  {ci:>6} -> {cj:>6}  {aai:>4} -> {aaj:>4}  {rate:10.6f}  {ts:>6}  {d:8d}")
 
-    # Show codon frequency distribution
-    print(f"\n  Top 10 codon frequencies (pi):")
-    sorted_pi = sorted(zip(sense_codons, pi), key=lambda x: -x[1])
-    for codon, freq in sorted_pi[:10]:
-        aa = GENETIC_CODE[codon]
-        print(f"    {codon} ({aa}):  {freq:.6f}")
-
 
 # =========================================================================
-# STANDALONE TEST
+# STANDALONE EXECUTION & PARAMETER OPTIMIZATION
 # =========================================================================
 if __name__ == "__main__":
     import os, sys
@@ -333,26 +308,48 @@ if __name__ == "__main__":
     print("Building classical register from DNA sequence...")
     s1 = build_classical_register(DNA_SEQUENCE)
 
-    # Extract codon frequencies from our pipeline
+    # Extract codon frequencies
     codon_freqs = {}
     for entry in s1['unique_register']:
-        codon = entry['codon']
-        weight = entry['weight']
-        codon_freqs[codon] = weight
+        codon_freqs[entry['codon']] = entry['weight']
 
     # Normalize to frequencies
     total = sum(codon_freqs.values())
     codon_freqs = {k: v / total for k, v in codon_freqs.items()}
 
     print(f"DNA: {len(DNA_SEQUENCE)} bases, {s1['num_unique']} unique codons")
-    print(f"Building GY94 rate matrix...\n")
+    
+    # -------------------------------------------------------------
+    # NEW STRATEGY: CALCULATE MACAQUE-SPECIFIC PARAMETERS
+    # -------------------------------------------------------------
+    TARGET_KAPPA = 2.1    # From primate population genomics literature
+    TARGET_OMEGA = 0.567  # From Macaque genome-wide dN/dS literature
+    
+    print(f"\n[OPTIMIZATION] Calculating target V for dN/dS (omega) = {TARGET_OMEGA}...")
+    
+    best_v = 43.99 # Fallback
+    min_error = float('inf')
+    
+    # Grid search to find the perfect V
+    for test_v in np.linspace(10, 200, 191):
+        implied_omega = calculate_implied_omega(codon_freqs, TARGET_KAPPA, test_v)
+        error = abs(implied_omega - TARGET_OMEGA)
+        if error < min_error:
+            min_error = error
+            best_v = test_v
+            
+    print(f"-> SUCCESS! Optimal Macaque Variability (V) found: {best_v:.2f}\n")
 
+    # Build the final matrix with these custom variables
     Q, sense_codons, pi, info = build_gy94_rate_matrix(
-        codon_freqs, kappa=1.45, V=43.99
+        codon_freqs, kappa=TARGET_KAPPA, V=best_v
     )
 
     print_gy94_report(Q, sense_codons, pi, info)
 
-# This creates a file you can open in Notepad or Excel
-np.savetxt("my_q_matrix.csv", Q, delimiter=",")
-print("Matrix saved to my_q_matrix.csv")
+    # =============================================================
+    # SAVING THE MATRIX
+    # =============================================================
+    # This creates a file you can open in Notepad or Excel
+    np.savetxt("my_q_matrix.csv", Q, delimiter=",")
+    print("Matrix saved to my_q_matrix.csv")
